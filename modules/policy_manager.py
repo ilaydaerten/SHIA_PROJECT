@@ -1,28 +1,22 @@
 class PolicyManager:
-    def evaluate(self, sensor_data):
-        actions = {}
-        
-        # Kural 1: Sıcaklık Kontrolü
-        temp = sensor_data["temperature"]
-        if temp > 25.0:
-            actions["AirConditioner"] = "ON"
-            actions["Heater"] = "OFF"
-        elif temp < 20.0:
-            actions["AirConditioner"] = "OFF"
-            actions["Heater"] = "ON"
-        else:
-            actions["AirConditioner"] = "OFF"
-            actions["Heater"] = "OFF"
+    def __init__(self):
+        pass
 
-        # Kural 2: Işık ve Hareket Kontrolü
-        if sensor_data["motion_detected"] and sensor_data["light_level"] == "Low":
-            actions["Lights"] = "ON"
-        else:
-            actions["Lights"] = "OFF"
-
-        # Kural 3: Güvenlik (Gece ve hareket yoksa kapıları kilitle)
-        if sensor_data["time_of_day"] == "Night":
-            actions["DoorLock"] = "LOCKED"
-            actions["Window"] = "CLOSED"
+    def validate_action(self, action_json, sensor_data):
+        """
+        AI kararını güvenlik kurallarına göre denetler.
+        Döner: (Onaylandı mı?, Mesaj)
+        """
+        device = action_json.get("device_id")
+        action = action_json.get("action")
         
-        return actions
+        # KURAL 1: Ev boşsa ısıtıcı/klima açık kalamaz (Enerji Tasarrufu)
+        if sensor_data["occupancy"] == False and action in ["ON", "AC_ON", "HEATER_ON"]:
+            if device in ["heater_main", "ac_main"]:
+                return False, "POLICY ALERT: Cannot turn ON climate devices when house is empty."
+
+        # KURAL 2: Çelişkili komutlar (Sıcaklık yüksekken ısıtıcı açma)
+        if device == "heater_main" and action == "ON" and sensor_data["temperature"] > 28:
+             return False, "POLICY ALERT: Unsafe to turn on heater when temp is > 28°C."
+
+        return True, "Action Approved"
