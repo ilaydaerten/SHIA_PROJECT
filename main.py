@@ -2,76 +2,104 @@ import time
 import os
 from dotenv import load_dotenv
 
-# Modülleri içe aktar
+# Modüller
 from modules.sensors import SensorSimulator
 from modules.devices import DeviceManager
 from modules.agent import SHIADecisionAgent
 from modules.policy_manager import PolicyManager
 from dashboard import display_dashboard
 
-# Konfigürasyon
-load_dotenv() # .env dosyasını yükler
-
-# Proje Bilgileri (Belgeden) [cite: 1]
-# Group 1: İlayda Erten (Lider), Elif Yılmaz, Azra Pala, Melih Öztorun, Enes Şahin
+# -------------------------------------------------------
+# Sistem Konfigürasyonu
+# -------------------------------------------------------
+load_dotenv()
 
 def main():
-    # 1. Başlatma (Initialization)
+
+    # 1. Nesneleri başlat
     sensors = SensorSimulator()
     devices = DeviceManager()
     agent = SHIADecisionAgent()
     policy = PolicyManager()
-    
+
     logs = []
 
     print("SHIA System Initializing...")
     time.sleep(1)
 
-    # 2. Ana Döngü (Main Loop)
+    # ---------------------------------------------------
+    # ANA DÖNGÜ
+    # ---------------------------------------------------
     try:
         while True:
-            # A. Veri Topla (Perceive)
+            # ------------------------
+            # A. Sensör verilerini oku
+            # ------------------------
             current_data = sensors.update()
 
-            # B. Karar Ver (Reason)
+            # ------------------------
+            # B. AI kararını al
+            # ------------------------
             decision_json = agent.decide(current_data)
 
-            # C. Kararı Doğrula (Policy Check)
-            is_valid, msg = policy.validate_action(decision_json, current_data)
+            # ------------------------
+            # C. Policy kontrolü
+            # ------------------------
+            is_valid, policy_msg = policy.validate_action(decision_json, current_data, devices.get_status())
 
-            # D. Eyleme Geç (Act)
+            # ------------------------
+            # D. Cihaza uygula
+            # ------------------------
             if is_valid:
                 dev_id = decision_json.get("device_id")
                 action = decision_json.get("action")
-                
-                if dev_id == "all":
-                    # Toplu kapatma senaryosu
-                    for d in devices.devices:
-                        devices.update_device(d, "OFF")
-                    log_msg = "All devices turned OFF via Policy."
-                elif action != "IDLE":
-                    _, log_msg = devices.update_device(dev_id, action)
+
+                if dev_id != "none":
+                    success, device_msg = devices.update_device(dev_id, action)
                 else:
-                    log_msg = "System IDLE (No action needed)."
+                    device_msg = "System IDLE — No device action taken."
             else:
-                log_msg = f"BLOCKED: {msg}"
+                device_msg = f"BLOCKED: {policy_msg}"
 
-            # E. Kendi Kendini Eleştir (Reflect/Feedback) [cite: 26]
-            if decision_json.get("action") != "IDLE":
-                review = agent.reflect(decision_json, current_data)
-                log_msg += f" | REVIEW: {review}"
+            # ------------------------
+            # E. Reflection (AI geri bildirim)
+            # ------------------------
+            reflection = agent.reflect(decision_json, current_data)
 
-            # Loglama
-            logs.append(f"[{current_data['time'].strftime('%H:%M')}] {log_msg}")
+            # ------------------------
+            # F. Log kaydı ekle
+            # ------------------------
+            log_entry = (
+                f"[{current_data['time'].strftime('%H:%M:%S')}] "
+                f"Decision: {decision_json} | Policy: {policy_msg} | "
+                f"Device: {device_msg} | Reflection: {reflection}"
+            )
+            logs.append(log_entry)
 
-            # F. Görselleştir
-            display_dashboard(current_data, devices.get_status(), decision_json, logs)
+            # ------------------------
+            # G. Dashboard Terminal UI
+            # ------------------------
+            display_dashboard(
+                sensor_data=current_data,
+                devices_status=devices.get_status(),
+                decision=decision_json,
+                policy_msg=policy_msg,
+                device_msg=device_msg,
+                total_power=devices.get_energy_usage(),
+                logs=logs
+            )
 
-            # Simülasyon hızı (Her 5 saniyede bir güncelle)
+            # ------------------------
+            # H. Bekleme süresi (simülasyon hızı)
+            # ------------------------
             time.sleep(5)
 
     except KeyboardInterrupt:
         print("\nSHIA System Shutdown.")
 
+
+# -----------------------------------------------------
+# PROGRAM BAŞLANGICI
+# -----------------------------------------------------
 if __name__ == "__main__":
     main()

@@ -1,3 +1,4 @@
+
 pandas
 numpy
 schedule
@@ -8,3 +9,4 @@ langchain-openai
 python-dotenv
 tabulate
 colorama
+streamlit
