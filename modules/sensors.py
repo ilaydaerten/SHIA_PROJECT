@@ -60,7 +60,7 @@ class SensorSimulator:
         delta = (outdoor - indoor) * 0.1
 
         # Küçük rastgele oynama
-        noise = random.uniform(-0.2, 0.2)
+        noise = random.uniform(-0.9, 0.9)
 
         new_temp = indoor + delta + noise
         self.data["temperature"] = round(new_temp, 1)
@@ -82,7 +82,7 @@ class SensorSimulator:
         noise = random.uniform(-1, 1)
 
         new_hum = humidity + trend + noise
-        new_hum = max(30, min(70, new_hum))  # 30–70 aralığında tut
+        new_hum = max(10, min(90, new_hum))  # 30–70 aralığında tut
 
         self.data["humidity"] = int(new_hum)
 

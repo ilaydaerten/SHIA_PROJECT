@@ -3,76 +3,97 @@ from datetime import datetime
 
 class SHIADecisionAgent:
     """
-    LLM KULLANMADAN çalışan, tamamen kural tabanlı SHIA ajanı.
-
-    Görevleri:
-    - Sensör verisine bakarak cihazlara karar vermek (decide)
-    - Verilen kararı enerji verimliliği açısından yorumlamak (reflect)
+    OFFLINE SHIA Agent (LLM yok)
+    - Memory (history)
+    - Trend analysis
+    - Rule-based decision making
+    - Manual lock awareness (kullanıcı kilitlediyse dokunmaz)
     """
 
     def __init__(self):
-        # İstersen ileride parametre ekleyebilirsin (konfor aralığı vb.)
-        self.comfort_min = 20  # Konfor sıcaklığı alt sınırı
-        self.comfort_max = 24  # Konfor sıcaklığı üst sınırı
+        self.memory = {
+            "temperature": [],
+            "light_level": [],
+            "occupancy": [],
+        }
+        self.memory_limit = 20
 
-    # ------------------------------------------------------------------ #
-    #  KURAL TABANLI KARAR
-    # ------------------------------------------------------------------ #
+    def _trend(self, values):
+        if len(values) < 2:
+            return 0.0
+        diffs = [values[i] - values[i - 1] for i in range(1, len(values))]
+        return sum(diffs) / len(diffs)
+
+    def _push(self, key, value):
+        self.memory[key].append(value)
+        if len(self.memory[key]) > self.memory_limit:
+            self.memory[key].pop(0)
 
     def decide(self, sensor_data: dict) -> dict:
-        """
-        Sensör verisini analiz eder ve JSON benzeri bir karar objesi döner.
-        HİÇBİR API veya LLM kullanılmaz.
+        temp = float(sensor_data.get("temperature", 22.0))
+        light = int(sensor_data.get("light_level", 400))
+        occupancy = bool(sensor_data.get("occupancy", True))
+        ts = datetime.now().isoformat()
 
-        Dönüş formatı HER ZAMAN:
-        {
-            "device_id": "...",
-            "action": "ON / OFF / IDLE / LOCKED / UNLOCKED",
-            "reason": "string",
-            "timestamp": "ISO 8601"
-        }
-        """
+        # manual locks: {"heater_main": True/False, ...}
+        manual_locks = sensor_data.get("manual_locks", {}) or {}
 
-        temp = sensor_data.get("temperature", 22)
-        light = sensor_data.get("light_level", 400)
-        occupancy = sensor_data.get("occupancy", True)
-        now = sensor_data.get("time", datetime.now())
-        ts = now.isoformat()
+        # memory update
+        self._push("temperature", temp)
+        self._push("light_level", light)
+        self._push("occupancy", occupancy)
+
+        temp_trend = self._trend(self.memory["temperature"])
+        light_trend = self._trend(self.memory["light_level"])
 
         device_id = "none"
         action = "IDLE"
-        reason = "Conditions are in a normal range; no action needed."
+        base_reason = "No action required."
 
-        # Ev boşsa: enerji tasarrufu → IDLE (kararı Policy zaten kontrol ediyor)
         if not occupancy:
             device_id = "none"
             action = "IDLE"
-            reason = "House is empty; keeping system idle to save energy."
-
+            base_reason = "House is empty; keeping system idle to save energy."
         else:
-            # Sıcak → Klima aç
-            if temp > 25:
-                device_id = "ac_main"
-                action = "ON"
-                reason = f"Temperature {temp}°C is high and house occupied; turning AC ON."
-
-            # Soğuk → Isıtıcı aç
-            elif temp < 19:
+            # Trend-aware heating/cooling/lighting
+            if temp < 19 or (temp < 21 and temp_trend < -0.30):
                 device_id = "heater_main"
                 action = "ON"
-                reason = f"Temperature {temp}°C is low and house occupied; turning heater ON."
+                base_reason = "Temperature is low or decreasing rapidly; turning heater ON proactively."
 
-            # Ortam çok karanlık → Işıkları aç
-            elif light < 100:
+            elif temp > 25 or (temp > 24 and temp_trend > 0.30):
+                device_id = "ac_main"
+                action = "ON"
+                base_reason = "Temperature is high or rising rapidly; turning AC ON proactively."
+
+            elif light < 120 or (light < 180 and light_trend < -15):
                 device_id = "lights_living"
                 action = "ON"
-                reason = f"Light level {light} is low and house occupied; turning living room lights ON."
+                base_reason = "Light level is low or decreasing; turning living room lights ON."
 
-            # Diğer durumlar → IDLE
             else:
                 device_id = "none"
                 action = "IDLE"
-                reason = "Environment is comfortable and bright enough; no action needed."
+                base_reason = "Environmental conditions are stable; no action needed."
+
+        # ✅ Manual lock enforcement (kritik)
+        if device_id != "none" and manual_locks.get(device_id, False):
+            locked_reason = (
+                f"User manual control is ACTIVE for '{device_id}'. "
+                f"AI will not change this device until manual lock is released."
+            )
+            device_id = "none"
+            action = "IDLE"
+            base_reason = locked_reason
+
+        reason = (
+            "Environment analysis:\n"
+            f"- Temperature: {temp:.1f}°C (trend {temp_trend:+.2f}°C/step)\n"
+            f"- Light level: {light} (trend {light_trend:+.1f}/step)\n"
+            f"- Occupancy: {'occupied' if occupancy else 'empty'}\n\n"
+            "Decision reasoning:\n"
+            f"- {base_reason}"
+        )
 
         return {
             "device_id": device_id,
@@ -81,50 +102,24 @@ class SHIADecisionAgent:
             "timestamp": ts,
         }
 
-    # ------------------------------------------------------------------ #
-    #  KURAL TABANLI REFLECTION (ENERJİ YORUMU)
-    # ------------------------------------------------------------------ #
-
     def reflect(self, last_decision: dict, sensor_data: dict) -> str:
-        """
-        Kararı enerji verimliliği açısından yorumlar.
-        LLM kullanılmaz; sadece basit kurallarla kısa bir cümle döner.
-        """
-
         action = last_decision.get("action", "IDLE")
         device_id = last_decision.get("device_id", "none")
-        temp = sensor_data.get("temperature", 22)
-        light = sensor_data.get("light_level", 400)
-        occupancy = sensor_data.get("occupancy", True)
+        temp = float(sensor_data.get("temperature", 22.0))
+        occupancy = bool(sensor_data.get("occupancy", True))
 
-        # Hiçbir şey yapılmadı
         if action == "IDLE" or device_id == "none":
-            if occupancy:
-                return "System stayed idle while conditions were comfortable; this is energy-efficient."
-            else:
-                return "House is empty and system stayed idle; this is highly energy-efficient."
+            # manuel kilit bilgisi varsa daha açıklayıcı yaz
+            manual_locks = sensor_data.get("manual_locks", {}) or {}
+            locked = [d for d, v in manual_locks.items() if v]
+            if locked:
+                return f"AI stayed idle because manual control is active for: {', '.join(locked)}."
+            return "System stayed idle; likely energy-efficient."
 
-        # Ev boşken cihaz açmak
-        if not occupancy and action == "ON":
-            return "Turning devices ON while the house is empty is not energy-efficient."
+        if action == "ON" and not occupancy:
+            return "Turning devices ON while house is empty is not energy-efficient."
 
-        # Konfor aralığında ısıtıcı/klima açıldıysa
-        if device_id in ["ac_main", "heater_main"] and action == "ON":
-            if self.comfort_min <= temp <= self.comfort_max:
-                return (
-                    f"Temperature is already comfortable at {temp}°C; turning {device_id} ON may waste energy."
-                )
-            else:
-                return (
-                    f"Turning {device_id} ON is reasonable at {temp}°C, but should be turned OFF once comfort range is reached."
-                )
+        if action == "ON" and 20 <= temp <= 24:
+            return "Turning device ON in a comfortable temperature range may waste energy."
 
-        # Işık çok yüksekken lamba açıldıysa
-        if device_id.startswith("lights") and action == "ON":
-            if light > 600:
-                return "Turning lights ON while the environment is already bright wastes energy."
-            else:
-                return "Turning lights ON at this light level is acceptable."
-
-        # Diğer tüm durumlar için genel yorum
-        return "The decision seems reasonable from an energy perspective given the current conditions."
+        return "Decision seems reasonable given the current conditions."
